@@ -38,9 +38,28 @@ MAX_FILE_SIZE = 50 * 1024 * 1024
 # Required files for processing
 REQUIRED_FILES = ["template_final.png", "a4.png"]
 
+# List of authorized user IDs (replace with your actual user IDs)
+# You can get your user ID by sending a message to @userinfobot on Telegram
+AUTHORIZED_USERS = [1279032438]  # Replace with your actual user IDs
+
+# Function to check if user is authorized
+def is_authorized(user_id: int) -> bool:
+    """Check if the user is authorized to use the bot."""
+    return user_id in AUTHORIZED_USERS
+
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Starts the conversation and asks for user's choice."""
+    # Check if user is authorized
+    user_id = update.effective_user.id
+    if not is_authorized(user_id):
+        await update.message.reply_text(
+            "❌ You are not authorized to use this bot.\n"
+            "Please contact the administrator for access."
+        )
+        logger.warning(f"Unauthorized access attempt from user ID: {user_id}")
+        return ConversationHandler.END
+    
     # Check if required files exist
     missing_files = [f for f in REQUIRED_FILES if not os.path.exists(f)]
     if missing_files:
@@ -62,6 +81,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Stores the user's choice and asks for the PDF file."""
+    # Check if user is authorized
+    user_id = update.effective_user.id
+    if not is_authorized(user_id):
+        await update.message.reply_text(
+            "❌ You are not authorized to use this bot."
+        )
+        return ConversationHandler.END
+    
     user_choice = update.message.text.lower()
     context.user_data['choice'] = user_choice
     await update.message.reply_text(
@@ -73,6 +100,14 @@ async def choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def handle_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Handles the PDF file upload and processing."""
+    # Check if user is authorized
+    user_id = update.effective_user.id
+    if not is_authorized(user_id):
+        await update.message.reply_text(
+            "❌ You are not authorized to use this bot."
+        )
+        return ConversationHandler.END
+    
     if not update.message.document:
         await update.message.reply_text('It seems you sent something other than a document. Please upload a PDF file.')
         return PDF_UPLOAD
@@ -90,8 +125,8 @@ async def handle_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
     doc = update.message.document
     file_id = doc.file_id
-    # Sanitize file_id to prevent path traversal
-    safe_file_id = "".join(c for c in file_id if c.isalnum() or c in ('-', '_'))
+    # Sanitize file_id to prevent path traversal and include user ID for better tracking
+    safe_file_id = f"{user_id}_{''.join(c for c in file_id if c.isalnum() or c in ('-', '_'))}"
     input_pdf_path = f'{safe_file_id}.pdf'
     
     try:
@@ -106,7 +141,7 @@ async def handle_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
         # --- Run processing based on user's choice ---
         if user_choice in ['color', 'both']:
-            logger.info(f"Running COLOR processing for {safe_file_id}")
+            logger.info(f"Running COLOR processing for user {user_id}, file {safe_file_id}")
             template_path = "template_final.png"
             a4_template_path = "a4.png"
             merged_output_path = f"NID_color_{safe_file_id}.png"
@@ -129,11 +164,11 @@ async def handle_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
                 if not color_files_found:
                     await update.message.reply_text("Sorry, something went wrong during the 'color' processing.")
             except Exception as e:
-                logger.error(f"Error in color processing: {e}", exc_info=True)
+                logger.error(f"Error in color processing for user {user_id}: {e}", exc_info=True)
                 await update.message.reply_text("An error occurred during 'color' processing.")
 
         if user_choice in ['black', 'both']:
-            logger.info(f"Running BLACK processing for {safe_file_id}")
+            logger.info(f"Running BLACK processing for user {user_id}, file {safe_file_id}")
             template_path = "template_final.png"
             a4_template_path = "a4.png"
             merged_output_path = f"NID_black_{safe_file_id}.png"
@@ -156,7 +191,7 @@ async def handle_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
                 if not black_files_found:
                     await update.message.reply_text("Sorry, something went wrong during the 'black' processing.")
             except Exception as e:
-                logger.error(f"Error in black processing: {e}", exc_info=True)
+                logger.error(f"Error in black processing for user {user_id}: {e}", exc_info=True)
                 await update.message.reply_text("An error occurred during 'black' processing.")
 
         # --- Send the final image(s) back to the user ---
@@ -171,30 +206,30 @@ async def handle_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
                             filename=os.path.basename(file_path)
                         )
                 except Exception as e:
-                    logger.error(f"Error sending file {file_path}: {e}")
+                    logger.error(f"Error sending file {file_path} to user {user_id}: {e}")
                     await update.message.reply_text(f"Failed to send {os.path.basename(file_path)}.")
         else:
             await update.message.reply_text('Could not generate any output files. Please check the PDF and try again.')
 
     except Exception as e:
-        logger.error(f"An error occurred: {e}", exc_info=True)
+        logger.error(f"An error occurred for user {user_id}: {e}", exc_info=True)
         await update.message.reply_text('A critical error occurred during processing. The operation has been stopped.')
     finally:
         # --- Cleanup all temporary files ---
-        logger.info("Cleaning up temporary files...")
+        logger.info(f"Cleaning up temporary files for user {user_id}...")
         for temp_file in temp_files_to_clean:
             try:
                 if os.path.exists(temp_file):
                     os.remove(temp_file)
             except Exception as e:
-                logger.error(f"Error removing temporary file {temp_file}: {e}")
+                logger.error(f"Error removing temporary file {temp_file} for user {user_id}: {e}")
         
         temp_img_dir = ".temp"
         if os.path.isdir(temp_img_dir):
             try:
                 shutil.rmtree(temp_img_dir)
             except Exception as e:
-                logger.error(f"Error removing temporary directory {temp_img_dir}: {e}")
+                logger.error(f"Error removing temporary directory {temp_img_dir} for user {user_id}: {e}")
 
     await update.message.reply_text('All done! Use /start to process another file.')
     context.user_data.clear()
@@ -203,6 +238,14 @@ async def handle_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Cancels and ends the conversation."""
+    # Check if user is authorized
+    user_id = update.effective_user.id
+    if not is_authorized(user_id):
+        await update.message.reply_text(
+            "❌ You are not authorized to use this bot."
+        )
+        return ConversationHandler.END
+    
     await update.message.reply_text(
         'Operation cancelled.', reply_markup=ReplyKeyboardRemove()
     )
@@ -233,8 +276,8 @@ def main() -> None:
     application.add_handler(conv_handler)
 
     # Start the Bot
-    application.run_polling()
     logger.info("Bot started and is polling for updates...")
+    application.run_polling()
 
 
 if __name__ == '__main__':
