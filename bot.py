@@ -2,7 +2,7 @@ import os
 import logging
 import shutil
 import asyncio
-from dotenv import load_dotenv
+#from dotenv import load_dotenv
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     Application,
@@ -244,7 +244,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
 # (rest of your code stays the same, only main() changes below)
 
 def main() -> None:
-    load_dotenv()
+    #load_dotenv()
 
     token = os.getenv("TELEGRAM_BOT_KEY")
     if not token:
