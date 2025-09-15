@@ -108,7 +108,7 @@ def process_image3_image4_with_ocr(template, image3_path, image4_path):
         draw = ImageDraw.Draw(template)
 
         try:
-            font = ImageFont.truetype("NotoSansEthiopic-Bold.ttf", 18)
+            font = ImageFont.truetype("./NotoSansEthiopic-Bold.ttf", 18)
         except IOError:
             font = ImageFont.load_default()
 
@@ -150,7 +150,7 @@ def write_pdf_blocks_on_template(pdf_doc, template_img):
     single_line_blocks = [29, 30, 31]
 
     try:
-        font = ImageFont.truetype("NotoSansEthiopic-Bold.ttf", 18)
+        font = ImageFont.truetype("./NotoSansEthiopic-Bold.ttf", 18)
     except IOError:
         font = ImageFont.load_default()
 
