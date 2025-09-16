@@ -3,7 +3,7 @@ import logging
 import shutil
 import tempfile
 import asyncio
-from dotenv import load_dotenv
+#from dotenv import load_dotenv
 from telegram import Update, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.ext import (
     Application,
@@ -38,7 +38,7 @@ AUTHORIZED_USERS = set()
 
 def load_authorized_users():
     """Load authorized Telegram user IDs from environment variable TELEGRAM_USER_IDS."""
-    ids = os.getenv("TELEGRAM_USER_ID", "")
+    ids = os.getenv("ADMIN_IDS", "")
     if ids:
         try:
             AUTHORIZED_USERS.update(int(uid.strip()) for uid in ids.split(",") if uid.strip().isdigit())
@@ -298,7 +298,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     return ConversationHandler.END
 
 def main() -> None:
-    load_dotenv()
+    #load_dotenv()
 
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
