@@ -402,7 +402,7 @@ def main_process(pdf_path, template_path, output_path, a4_template_path, output_
     log("Main", f"Finished in {time.time() - start_time:.2f}s")
 
 if __name__ == "__main__":
-    input_pdf = "e6.pdf"
+    input_pdf = "e2.pdf"
     template_image = "template_final.png"
     output_image = "merged_output.png"
     a4_template_image = "a4.png"
