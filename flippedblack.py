@@ -1,9 +1,11 @@
 import os
-import fitz  # PyMuPDF
+import fitz # PyMuPDF
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 import pytesseract
 from rembg import remove
 import time
+import re
+import sys
 
 # Utility log function
 def log(step, msg):
@@ -98,8 +100,6 @@ def process_image3_image4_with_ocr(template, image3_path, image4_path):
         regions = [
             {"type": "ocr", "source_img": "img3", "snapshot": (231, 2451, 957, 111), "paste": (355, 385)},
             {"type": "paste", "source_img": "img3", "snapshot": (525, 2628, 825, 285), "paste": (417, 439, 220, 75)},
-            {"type": "paste", "source_img": "img3", "snapshot": (1778, 1128, 56, 450), "paste": (16, 337, 20, 115)},
-            {"type": "paste", "source_img": "img3", "snapshot": (1778, 524, 62, 552), "paste": (16, 78, 20, 146)},
             {"type": "paste", "source_img": "img4", "snapshot": (1248, 2052, 546, 96), "paste": (1056, 462, 161, 30)},
         ]
 
@@ -108,7 +108,7 @@ def process_image3_image4_with_ocr(template, image3_path, image4_path):
         draw = ImageDraw.Draw(template)
 
         try:
-            font = ImageFont.truetype("NotoSansEthiopic-Bold.ttf", 18)
+            font = ImageFont.truetype("NotoSansEthiopic-Bold.ttf", 24)
         except IOError:
             font = ImageFont.load_default()
 
@@ -133,24 +133,89 @@ def process_image3_image4_with_ocr(template, image3_path, image4_path):
         log("Step 3", f"Error: {e}")
         return None
 
+# ---- TEXT EXTRACTION AND DRAWING ----
+def extract_dates_from_image(image_path):
+    """Extracts Ethiopian and English dates from the last line of an image."""
+    try:
+        log("Date Extraction", "Starting OCR for dates...")
+        img = Image.open(image_path)
+        text = pytesseract.image_to_string(img)
+        
+        # Filter out empty lines and get the last one
+        lines = [line for line in text.splitlines() if line.strip()]
+        if not lines:
+            log("Date Extraction", "OCR could not find any text in the image.")
+            return None, None
+            
+        last_line = lines[-1]
+
+        # Fix common OCR error where "20" is read as "2 0"
+        last_line = re.sub(r"2\s*0\s*(\d{2}/\d{2}/\d{2})", r"20\1", last_line)
+
+        # Regex to find the two date formats separated by a pipe
+        match = re.search(r"(\d{4}/\d{2}/\d{2})\s*\|\s*(\d{4}/[A-Za-z]{3}/\d{2})", last_line)
+        
+        if match:
+            eth_date, eng_date = match.groups()
+            log("Date Extraction", f"Found dates: ETH='{eth_date}', ENG='{eng_date}'")
+            return eth_date, eng_date
+        else:
+            log("Date Extraction", f"Could not find the expected date formats in the last line: '{last_line}'")
+            return None, None
+
+    except Exception as e:
+        log("Date Extraction", f"An error occurred during OCR: {e}")
+        return None, None
+
+def draw_vertical_text(base_img, text, position, font, fill_color=(0, 0, 0, 255)):
+    """
+    Draws text bottom-to-top at a given position, correctly handling transparency.
+    """
+    bbox = font.getbbox(text)
+    text_width = bbox[2] - bbox[0]
+    text_height = bbox[3] - bbox[1]
+
+    txt_img = Image.new("RGBA", (text_width, text_height), (255, 255, 255, 0))
+    d = ImageDraw.Draw(txt_img)
+    d.text((0, -bbox[1]), text, font=font, fill=fill_color)
+    rotated_text = txt_img.rotate(90, expand=1, resample=Image.Resampling.BICUBIC)
+    base_img.paste(rotated_text, position, rotated_text)
+
+def write_dates_on_template(template_img, eth_date, eng_date):
+    """Draws the extracted dates vertically on the template image."""
+    log("Step 3.5", "Drawing dates on template...")
+    try:
+        font = ImageFont.truetype("NotoSansEthiopic-Bold.ttf", 21)
+    except IOError:
+        font = ImageFont.load_default()
+
+    if eth_date:
+        draw_vertical_text(template_img, eth_date, (17, 339), font)
+        log("Step 3.5", "Wrote Ethiopian date.")
+    if eng_date:
+        draw_vertical_text(template_img, eng_date, (17, 98), font)
+        log("Step 3.5", "Wrote English date.")
+    
+    log("Step 3.5", "Done drawing dates.")
+    return template_img
+
 # ---- TEXT BLOCKS ----
 def write_pdf_blocks_on_template(pdf_doc, template_img):
-    """Extracts text blocks from the PDF and writes them onto the template image."""
     log("Step 4", "Writing PDF text blocks...")
     block_to_png_mapping = [
-        {"pdf_block_index": 29, "png_point": {"x": 355, "y": 268}},
-        {"pdf_block_index": 30, "png_point": {"x": 355, "y": 324}},
-        {"pdf_block_index": 31, "png_point": {"x": 960, "y": 146}},
-        {"pdf_block_index": 32, "png_point": {"x": 960, "y": 67}},
-        {"pdf_block_index": 33, "png_point": {"x": 960, "y": 200}},
-        {"pdf_block_index": 34, "png_point": {"x": 960, "y": 255}},
-        {"pdf_block_index": 35, "png_point": {"x": 960, "y": 380}},
-        {"pdf_block_index": 37, "png_point": {"x": 355, "y": 158}},
+        {"pdf_block_index": 29, "png_point": {"x": 355, "y": 268, "w": 200, "h": 30}},
+        {"pdf_block_index": 30, "png_point": {"x": 355, "y": 324, "w": 200, "h": 30}},
+        {"pdf_block_index": 31, "png_point": {"x": 960, "y": 146, "w": 300, "h": 30}},
+        {"pdf_block_index": 32, "png_point": {"x": 960, "y": 67, "w": 300, "h": 30}},
+        {"pdf_block_index": 33, "png_point": {"x": 960, "y": 200, "w": 300, "h": 30}},
+        {"pdf_block_index": 34, "png_point": {"x": 961, "y": 286, "w": 378, "h": 76}},
+        {"pdf_block_index": 35, "png_point": {"x": 961, "y": 362, "w": 377, "h": 82}},  # default y=362
+        {"pdf_block_index": 37, "png_point": {"x": 355, "y": 158, "w": 200, "h": 30}},
     ]
     single_line_blocks = [29, 30, 31]
 
     try:
-        font = ImageFont.truetype("NotoSansEthiopic-Bold.ttf", 18)
+        font = ImageFont.truetype("NotoSansEthiopic-Bold.ttf", 24)
     except IOError:
         font = ImageFont.load_default()
 
@@ -168,19 +233,88 @@ def write_pdf_blocks_on_template(pdf_doc, template_img):
             log("Step 4", f"Block {idx} empty")
             continue
 
-        if idx == 34:  # wrap logic
-            words = text.split()
-            if len(words) > 5:
-                wrapped_words = [words[j:j+3] for j in range(0, len(words), 3)]
-                text = "\n".join(" ".join(line) for line in wrapped_words)
-                for block in block_to_png_mapping:
-                    if block["pdf_block_index"] == 35:
-                        block["png_point"]["y"] = 380
-            else:
-                for block in block_to_png_mapping:
-                    if block["pdf_block_index"] == 35:
-                        block["png_point"]["y"] = 362
+        # Handle block 34
+        if idx == 34:
+            x, y, w, h = point["x"], point["y"], point["w"], point["h"]
+            lines = []
+            current_line = ""
+            max_width = 1335 - x
 
+            # Determine if font needs to be reduced
+            font34 = font  # default
+            full_text_bbox = font.getbbox(text)
+            text_width = full_text_bbox[2] - full_text_bbox[0]
+            if text_width > max_width:
+                try:
+                    font34 = ImageFont.truetype("NotoSansEthiopic-Bold.ttf", 20.5)
+                except IOError:
+                    font34 = font
+
+            for line in text.split("\n"):
+                for word in line.split(" "):
+                    test_line = current_line + (" " if current_line else "") + word
+                    bbox = font34.getbbox(test_line)
+                    line_width = bbox[2] - bbox[0]
+                    if line_width > max_width:
+                        if current_line:
+                            lines.append(current_line)
+                        current_line = word
+                    else:
+                        current_line = test_line
+                if current_line:
+                    lines.append(current_line)
+                    current_line = ""
+
+            bbox = font34.getbbox("Ay")
+            line_height = bbox[3] - bbox[1] + 2
+            max_lines = h // line_height
+            for i, line in enumerate(lines[:max_lines]):
+                draw.text((x, y + i * line_height), line, font=font34, fill="black")
+
+            log("Step 4", f"Wrote block 34 with {len(lines)} wrapped lines (font size {font34.size if hasattr(font34,'size') else 'default'})")
+
+            # adjust block 35 position
+            for m in block_to_png_mapping:
+                if m["pdf_block_index"] == 35:
+                    if "\n" in text:
+                        m["png_point"]["y"] = 385
+                        log("Step 4", "Shifted block 35 y=385 due to newline in block 34")
+                    else:
+                        m["png_point"]["y"] = 362  # restore default
+            continue
+
+        # Handle block 35 wrapping
+        if idx == 35:
+            x, y, w, h = point["x"], point["y"], point["w"], point["h"]
+            lines = []
+            current_line = ""
+            max_width = 1335 - x
+
+            for line in text.split("\n"):
+                for word in line.split(" "):
+                    test_line = current_line + (" " if current_line else "") + word
+                    bbox = font.getbbox(test_line)
+                    line_width = bbox[2] - bbox[0]
+                    if line_width > max_width:
+                        if current_line:
+                            lines.append(current_line)
+                        current_line = word
+                    else:
+                        current_line = test_line
+                if current_line:
+                    lines.append(current_line)
+                    current_line = ""
+
+            bbox = font.getbbox("Ay")
+            line_height = bbox[3] - bbox[1] + 2
+            max_lines = h // line_height
+            for i, line in enumerate(lines[:max_lines]):
+                draw.text((x, y + i * line_height), line, font=font, fill="black")
+
+            log("Step 4", f"Wrote block 35 with {len(lines)} wrapped lines")
+            continue
+
+        # Handle single line formatting
         if idx in single_line_blocks:
             text = "|".join(text.split())
 
@@ -243,13 +377,17 @@ def main_process(pdf_path, template_path, output_path, a4_template_path, output_
         log("Main", "Less than 4 images found in PDF")
         return
 
-    # MODIFIED: Pass the path to image_3.png (images[2]) to the function
     final_image = process_image1_and_2(pdf_doc, template_path, images[2])
     if not final_image: return
 
     final_image = process_image3_image4_with_ocr(final_image, images[2], images[3])
     if not final_image: return
-
+    
+    # NEW STEP: Extract and draw dates from image 3
+    eth_date, eng_date = extract_dates_from_image(images[2])
+    if eth_date or eng_date:
+        final_image = write_dates_on_template(final_image, eth_date, eng_date)
+    
     final_image = write_pdf_blocks_on_template(pdf_doc, final_image)
 
     try:
