@@ -15,9 +15,13 @@ from telegram.ext import (
     filters
 )
 
-# Heavy image-processing functions (synchronous)
+# Heavy image-processing functions (synchronous) for /start
 from flippedcolor import main_process as main_process_color
 from flippedblack import main_process as main_process_black
+
+# Heavy image-processing functions (synchronous) for /swap
+from swapcolor import main_process as main_process_swap_color
+from swapblack import main_process as main_process_swap_black
 
 # --- Logging setup ---
 logging.basicConfig(
@@ -31,6 +35,7 @@ CHOOSING, PDF_UPLOAD = range(2)
 # --- Config ---
 MAX_FILE_SIZE = 50 * 1024 * 1024
 REQUIRED_FILES = ["template_final.png", "a4.png"]
+REQUIRED_FILES_SWAP = ["template_final.png", "a4.png"] # Assumes these are also needed for the swap process
 
 # --- Authorized users ---
 AUTHORIZED_USERS = set()
@@ -65,9 +70,34 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         )
         return ConversationHandler.END
 
+    context.user_data['mode'] = 'start'
     reply_keyboard = [["Color", "Black", "Both"]]
     await update.message.reply_text(
         "👋 Hi! I am the NID PDF to PNG Processor Bot.\n\n"
+        "Please choose an option:",
+        reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True),
+    )
+    return CHOOSING
+
+async def swap(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user_id = update.effective_user.id
+    if not is_authorized(user_id):
+        await update.message.reply_text("❌ You are not authorized to use this bot.")
+        logger.warning(f"Unauthorized access attempt from user {user_id}")
+        return ConversationHandler.END
+
+    # Check for the required files for the swap process
+    missing_files = [f for f in REQUIRED_FILES_SWAP if not os.path.exists(f)]
+    if missing_files:
+        await update.message.reply_text(
+            f"❌ Missing required files: {', '.join(missing_files)}. Contact admin."
+        )
+        return ConversationHandler.END
+    
+    context.user_data['mode'] = 'swap'
+    reply_keyboard = [["Color", "Black", "Both"]]
+    await update.message.reply_text(
+        "👋 Hi! I am the NID PDF to PNG Processor Bot (Swap Mode).\n\n"
         "Please choose an option:",
         reply_markup=ReplyKeyboardMarkup(reply_keyboard, one_time_keyboard=True),
     )
@@ -119,54 +149,103 @@ async def handle_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         await update.message.reply_text("📥 PDF received. Processing has started...")
 
         user_choice = context.user_data.get("choice")
+        mode = context.user_data.get("mode", "start") # Default to 'start' if not set
 
-        # COLOR
-        if user_choice in ["color", "both"]:
-            await update.message.reply_text("🎨 Running color processing...")
-            merged_output_path = os.path.join(job_dir, "NID_color.png")
-            final_output_path = os.path.join(job_dir, "NIDA4_color.png")
+        if mode == 'start':
+            # COLOR
+            if user_choice in ["color", "both"]:
+                await update.message.reply_text("🎨 Running color processing...")
+                merged_output_path = os.path.join(job_dir, "NID_color.png")
+                final_output_path = os.path.join(job_dir, "NIDA4_color.png")
 
-            try:
-                await asyncio.to_thread(
-                    main_process_color,
-                    input_pdf_path,
-                    "template_final.png",
-                    merged_output_path,
-                    "a4.png",
-                    final_output_path,
-                )
-                await update.message.reply_text("✅ Color processing finished.")
-                if os.path.exists(merged_output_path):
-                    output_files_to_send.append(merged_output_path)
-                if os.path.exists(final_output_path):
-                    output_files_to_send.append(final_output_path)
-            except Exception as e:
-                logger.error(f"Error in color processing for user {user_id}: {e}", exc_info=True)
-                await update.message.reply_text("❌ An error occurred during 'color' processing.")
+                try:
+                    await asyncio.to_thread(
+                        main_process_color,
+                        input_pdf_path,
+                        "template_final.png",
+                        merged_output_path,
+                        "a4.png",
+                        final_output_path,
+                    )
+                    await update.message.reply_text("✅ Color processing finished.")
+                    if os.path.exists(merged_output_path):
+                        output_files_to_send.append(merged_output_path)
+                    if os.path.exists(final_output_path):
+                        output_files_to_send.append(final_output_path)
+                except Exception as e:
+                    logger.error(f"Error in color processing for user {user_id}: {e}", exc_info=True)
+                    await update.message.reply_text("❌ An error occurred during 'color' processing.")
 
-        # BLACK
-        if user_choice in ["black", "both"]:
-            await update.message.reply_text("🖤 Running black & white processing...")
-            merged_output_path = os.path.join(job_dir, "NID_black.png")
-            final_output_path = os.path.join(job_dir, "NIDA4_black.png")
+            # BLACK
+            if user_choice in ["black", "both"]:
+                await update.message.reply_text("🖤 Running black & white processing...")
+                merged_output_path = os.path.join(job_dir, "NID_black.png")
+                final_output_path = os.path.join(job_dir, "NIDA4_black.png")
 
-            try:
-                await asyncio.to_thread(
-                    main_process_black,
-                    input_pdf_path,
-                    "template_final.png",
-                    merged_output_path,
-                    "a4.png",
-                    final_output_path,
-                )
-                await update.message.reply_text("✅ Black & white processing finished.")
-                if os.path.exists(merged_output_path):
-                    output_files_to_send.append(merged_output_path)
-                if os.path.exists(final_output_path):
-                    output_files_to_send.append(final_output_path)
-            except Exception as e:
-                logger.error(f"Error in black processing for user {user_id}: {e}", exc_info=True)
-                await update.message.reply_text("❌ An error occurred during 'black' processing.")
+                try:
+                    await asyncio.to_thread(
+                        main_process_black,
+                        input_pdf_path,
+                        "template_final.png",
+                        merged_output_path,
+                        "a4.png",
+                        final_output_path,
+                    )
+                    await update.message.reply_text("✅ Black & white processing finished.")
+                    if os.path.exists(merged_output_path):
+                        output_files_to_send.append(merged_output_path)
+                    if os.path.exists(final_output_path):
+                        output_files_to_send.append(final_output_path)
+                except Exception as e:
+                    logger.error(f"Error in black processing for user {user_id}: {e}", exc_info=True)
+                    await update.message.reply_text("❌ An error occurred during 'black' processing.")
+
+        elif mode == 'swap':
+            # COLOR (SWAP VERSION)
+            if user_choice in ["color", "both"]:
+                await update.message.reply_text("🎨 Running color processing (swap mode)...")
+                merged_output_path = os.path.join(job_dir, "NID_color.png")
+                final_output_path = os.path.join(job_dir, "NIDA4_color.png")
+                try:
+                    await asyncio.to_thread(
+                        main_process_swap_color,
+                        input_pdf_path,
+                        "template_final.png",
+                        merged_output_path,
+                        "a4.png",
+                        final_output_path,
+                    )
+                    await update.message.reply_text("✅ Color processing (swap mode) finished.")
+                    if os.path.exists(merged_output_path):
+                        output_files_to_send.append(merged_output_path)
+                    if os.path.exists(final_output_path):
+                        output_files_to_send.append(final_output_path)
+                except Exception as e:
+                    logger.error(f"Error in swap color processing for user {user_id}: {e}", exc_info=True)
+                    await update.message.reply_text("❌ An error occurred during 'color' processing (swap mode).")
+
+            # BLACK (SWAP VERSION)
+            if user_choice in ["black", "both"]:
+                await update.message.reply_text("🖤 Running black & white processing (swap mode)...")
+                merged_output_path = os.path.join(job_dir, "NID_black.png")
+                final_output_path = os.path.join(job_dir, "NIDA4_black.png")
+                try:
+                    await asyncio.to_thread(
+                        main_process_swap_black,
+                        input_pdf_path,
+                        "template_final.png",
+                        merged_output_path,
+                        "a4.png",
+                        final_output_path,
+                    )
+                    await update.message.reply_text("✅ Black & white processing (swap mode) finished.")
+                    if os.path.exists(merged_output_path):
+                        output_files_to_send.append(merged_output_path)
+                    if os.path.exists(final_output_path):
+                        output_files_to_send.append(final_output_path)
+                except Exception as e:
+                    logger.error(f"Error in swap black processing for user {user_id}: {e}", exc_info=True)
+                    await update.message.reply_text("❌ An error occurred during 'black' processing (swap mode).")
 
         # Send outputs
         if output_files_to_send:
@@ -198,7 +277,7 @@ async def handle_pdf(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         except Exception as e:
             logger.error(f"Error cleaning up job folder {job_dir}: {e}")
 
-    await update.message.reply_text("🎉 All done! Use /start to process another file.")
+    await update.message.reply_text("🎉 All done! Use /start or /swap to process another file.")
     context.user_data.clear()
     return ConversationHandler.END
 
@@ -235,7 +314,10 @@ def main() -> None:
     application = Application.builder().token(token).build()
 
     conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
+        entry_points=[
+            CommandHandler("start", start),
+            CommandHandler("swap", swap)
+        ],
         states={
             CHOOSING: [MessageHandler(filters.Regex("^(Color|Black|Both)$"), choice)],
             PDF_UPLOAD: [MessageHandler(filters.Document.PDF, handle_pdf)],
