@@ -143,6 +143,7 @@ def process_image3_image4_with_ocr(template, image3_path, image4_path):
         return None
 
 # ---- TEXT BLOCKS ----
+# ---- TEXT BLOCKS ----
 def write_pdf_blocks_on_template(pdf_doc, template_img):
     log("Step 4", "Writing PDF text blocks...")
     block_to_png_mapping = [
@@ -207,35 +208,25 @@ def write_pdf_blocks_on_template(pdf_doc, template_img):
                         m["png_point"]["y"] = 362
             continue
 
-        # Handle block 35 wrapping (unchanged)
+        # ---- FIXED block 35: write multiple lines until x=1335 ----
         if idx == 35:
             x, y, w, h = point["x"], point["y"], point["w"], point["h"]
-            lines = []
-            current_line = ""
-            max_width = 1335 - x
-
-            for line in text.split("\n"):
-                for word in line.split(" "):
-                    test_line = current_line + (" " if current_line else "") + word
-                    bbox = font.getbbox(test_line)
-                    line_width = bbox[2] - bbox[0]
-                    if line_width > max_width:
-                        if current_line:
-                            lines.append(current_line)
-                        current_line = word
-                    else:
-                        current_line = test_line
-                if current_line:
-                    lines.append(current_line)
-                    current_line = ""
-
+            max_x = 1335
             bbox = font.getbbox("Ay")
             line_height = bbox[3] - bbox[1] + 2
-            max_lines = h // line_height
-            for i, line in enumerate(lines[:max_lines]):
-                draw.text((x, y + i * line_height), line, font=font, fill="black")
 
-            log("Step 4", f"Wrote block 35 with {len(lines)} wrapped lines")
+            lines = text.split("\n")
+            for i, line in enumerate(lines):
+                current_text = ""
+                for char in line:
+                    test_text = current_text + char
+                    bbox = font.getbbox(test_text)
+                    text_width = bbox[2] - bbox[0]
+                    if x + text_width > max_x:
+                        break  # stop if text reaches x=1335
+                    current_text = test_text
+                draw.text((x, y + i * line_height), current_text, font=font, fill="black")
+            log("Step 4", f"Wrote block 35 up to x=1335")
             continue
 
         # Handle single-line formatting
@@ -268,38 +259,44 @@ def write_pdf_blocks_on_template(pdf_doc, template_img):
 
 
 
+
 # ---- NEW FUNCTIONS FOR DATE EXTRACTION & DRAWING ----
 def extract_dates_from_image(image_path):
-    """Extracts Ethiopian and English dates from the last line of an image."""
+    """Safely extracts Ethiopian and English dates from the 'Date of Issue' line."""
     try:
         img = Image.open(image_path)
         text = pytesseract.image_to_string(img)
-        
-        # Filter out empty lines and get the last one
-        lines = [line for line in text.splitlines() if line.strip()]
+
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
         if not lines:
-            raise ValueError("OCR could not find any text in the image.")
-            
-        last_line = lines[-1]
+            log("OCR", "No text found in the image.")
+            return None, None
 
-        # Fix common OCR error where "20" is read as "2 0"
-        last_line = re.sub(r"2\s*0\s*(\d{2}/\d{2}/\d{2})", r"20\1", last_line)
+        doi_line = None
+        for line in lines:
+            if re.search(r"Date\s*of\s*Issue", line, re.IGNORECASE):
+                doi_line = line
+                break
 
-        # Regex to find the two date formats separated by a pipe
-        match = re.search(r"(\d{4}/\d{2}/\d{2})\s*\|\s*(\d{4}/[A-Za-z]{3}/\d{2})", last_line)
-        
+        if not doi_line:
+            log("OCR", "Could not find 'Date of Issue' line in OCR output.")
+            return None, None
+
+        log("OCR", f"Found 'Date of Issue' line: '{doi_line}'")
+
+        cleaned_line = re.sub(r"[^\w:/]", "", doi_line)
+        match = re.search(r"(\d{4}/\d{2}/\d{2}).*(\d{4}/[A-Za-z]{3}/\d{2})", cleaned_line)
         if match:
             eth_date, eng_date = match.groups()
+            log("OCR", f"Extracted ETH={eth_date}, ENG={eng_date}")
             return eth_date, eng_date
         else:
-            raise ValueError(f"Could not find the expected date formats in the last line: '{last_line}'")
+            log("OCR", f"Could not extract dates from line: '{doi_line}'")
+            return None, None
 
-    except FileNotFoundError:
-        print(f"Error: The file '{image_path}' was not found.")
-        sys.exit(1)
     except Exception as e:
-        print(f"An error occurred during OCR: {e}")
-        sys.exit(1)
+        log("OCR", f"Error during OCR: {e}")
+        return None, None
 
 def draw_vertical_text(base_img, text, position, font, fill_color=(0, 0, 0, 255)):
     """
@@ -318,31 +315,31 @@ def draw_vertical_text(base_img, text, position, font, fill_color=(0, 0, 0, 255)
     base_img.paste(rotated_text, position, rotated_text)
 
 def process_dates_from_image(template_img, image3_path):
-    """Integrates date extraction and vertical drawing into the main workflow."""
+    """Integrates date extraction and vertical drawing safely."""
     try:
         log("Step 4.5", "Extracting and placing dates from image 3...")
         eth_date, eng_date = extract_dates_from_image(image3_path)
-        
-        # Load the font.
+
+        # Load font
         try:
             font = ImageFont.truetype("NotoSansEthiopic-Bold.ttf", 21)
         except IOError:
             font = ImageFont.load_default()
 
-        # Place the Ethiopian and English dates on the template.
-        # NOTE: The coordinates (17, 339) and (17, 98) are from the user's
-        # original, smaller template. They are used here assuming they are relative
-        # to the final image's larger coordinate system.
+        # Use placeholders if OCR fails
+        eth_date = eth_date or "YYYY/MM/DD"
+        eng_date = eng_date or "YYYY/Mon/DD"
+
         draw_vertical_text(template_img, eth_date, (17, 339), font)
         draw_vertical_text(template_img, eng_date, (17, 98), font)
-        
-        log("Step 4.5", "Successfully placed extracted dates.")
+
+        log("Step 4.5", "Successfully placed extracted dates (or placeholders).")
         return template_img
 
     except Exception as e:
         log("Step 4.5", f"Error processing dates: {e}")
         return template_img
-
+    
 # ---- MAIN ----
 def main_process(pdf_path, template_path, output_path, a4_template_path, output_a4_path):
     start_time = time.time()

@@ -135,36 +135,40 @@ def process_image3_image4_with_ocr(template, image3_path, image4_path):
 
 # ---- TEXT EXTRACTION AND DRAWING ----
 def extract_dates_from_image(image_path):
-    """Extracts Ethiopian and English dates from the last line of an image."""
+    """Safely extracts Ethiopian and English dates from the 'Date of Issue' line."""
     try:
-        log("Date Extraction", "Starting OCR for dates...")
         img = Image.open(image_path)
         text = pytesseract.image_to_string(img)
-        
-        # Filter out empty lines and get the last one
-        lines = [line for line in text.splitlines() if line.strip()]
+
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
         if not lines:
-            log("Date Extraction", "OCR could not find any text in the image.")
+            log("OCR", "No text found in the image.")
             return None, None
-            
-        last_line = lines[-1]
 
-        # Fix common OCR error where "20" is read as "2 0"
-        last_line = re.sub(r"2\s*0\s*(\d{2}/\d{2}/\d{2})", r"20\1", last_line)
+        doi_line = None
+        for line in lines:
+            if re.search(r"Date\s*of\s*Issue", line, re.IGNORECASE):
+                doi_line = line
+                break
 
-        # Regex to find the two date formats separated by a pipe
-        match = re.search(r"(\d{4}/\d{2}/\d{2})\s*\|\s*(\d{4}/[A-Za-z]{3}/\d{2})", last_line)
-        
+        if not doi_line:
+            log("OCR", "Could not find 'Date of Issue' line in OCR output.")
+            return None, None
+
+        log("OCR", f"Found 'Date of Issue' line: '{doi_line}'")
+
+        cleaned_line = re.sub(r"[^\w:/]", "", doi_line)
+        match = re.search(r"(\d{4}/\d{2}/\d{2}).*(\d{4}/[A-Za-z]{3}/\d{2})", cleaned_line)
         if match:
             eth_date, eng_date = match.groups()
-            log("Date Extraction", f"Found dates: ETH='{eth_date}', ENG='{eng_date}'")
+            log("OCR", f"Extracted ETH={eth_date}, ENG={eng_date}")
             return eth_date, eng_date
         else:
-            log("Date Extraction", f"Could not find the expected date formats in the last line: '{last_line}'")
+            log("OCR", f"Could not extract dates from line: '{doi_line}'")
             return None, None
 
     except Exception as e:
-        log("Date Extraction", f"An error occurred during OCR: {e}")
+        log("OCR", f"Error during OCR: {e}")
         return None, None
 
 def draw_vertical_text(base_img, text, position, font, fill_color=(0, 0, 0, 255)):
