@@ -184,7 +184,33 @@ def draw_vertical_text(base_img, text, position, font, fill_color=(0, 0, 0, 255)
     d.text((0, -bbox[1]), text, font=font, fill=fill_color)
     rotated_text = txt_img.rotate(90, expand=1, resample=Image.Resampling.BICUBIC)
     base_img.paste(rotated_text, position, rotated_text)
+    
+def process_dates_from_image(template_img, image3_path):
+    """Integrates date extraction and vertical drawing safely."""
+    try:
+        log("Step 4.5", "Extracting and placing dates from image 3...")
+        eth_date, eng_date = extract_dates_from_image(image3_path)
 
+        # Load font
+        try:
+            font = ImageFont.truetype("NotoSansEthiopic-Bold.ttf", 21)
+        except IOError:
+            font = ImageFont.load_default()
+
+        # Use placeholders if OCR fails
+        eth_date = eth_date or "YYYY/MM/DD"
+        eng_date = eng_date or "YYYY/Mon/DD"
+
+        draw_vertical_text(template_img, eth_date, (17, 339), font)
+        draw_vertical_text(template_img, eng_date, (17, 98), font)
+
+        log("Step 4.5", "Successfully placed extracted dates (or placeholders).")
+        return template_img
+
+    except Exception as e:
+        log("Step 4.5", f"Error processing dates: {e}")
+        return template_img
+    
 def write_dates_on_template(template_img, eth_date, eng_date):
     """Draws the extracted dates vertically on the template image."""
     log("Step 3.5", "Drawing dates on template...")
