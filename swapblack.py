@@ -1,11 +1,9 @@
 import os
-import fitz # PyMuPDF
+import fitz  # PyMuPDF
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 import pytesseract
 from rembg import remove
 import time
-import re
-import sys
 
 # Utility log function
 def log(step, msg):
@@ -41,40 +39,45 @@ def extract_images(pdf_doc, temp_dir=".temp"):
 def process_image1_and_2(pdf_doc, template_path, image3_path, final_size=(1832, 560)):
     """
     Processes images for the final composition.
-    - Image 1 is now cropped from image3_path.
+    - Image 1 is cropped from image3_path (ID photo) with transparent background.
     - Image 2 is extracted directly from a PDF rectangle.
     """
     try:
         log("Step 2", "Processing image 1 and 2...")
 
         page = pdf_doc[0]
-        # Rectangle for image 2 from the PDF
         source_rect2 = fitz.Rect(110.0, 411.0, 274.0, 573.0)
 
-        # Destination positions and sizes for pasting
         dest_img1_pos, dest_img1_size = (49, 150), (285, 363)
         dest_img2_pos, dest_img2_size = (1357, 38), (435, 436)
 
-        # Create the base canvas from the template
         final_image = Image.new("RGBA", final_size, (255, 255, 255, 255))
         template = Image.open(template_path).resize(final_size, Image.Resampling.LANCZOS)
         final_image.paste(template, (0, 0))
 
-        # --- MODIFIED: Process Image 1 from image_3.png ---
+        # --- Process Image 1 (ID photo) with transparency ---
         log("Step 2", "Cropping image 1 from the extracted image 3...")
-        img3 = Image.open(image3_path)
-        # Crop coordinates: (x=524, y=411, w=848, h=1093)
-        # PIL crop box is (left, upper, right, lower)
+        img3 = Image.open(image3_path).convert("RGBA")
         crop_box = (524, 411, 524 + 848, 411 + 1093)
         img1 = img3.crop(crop_box)
-        
-        # Remove background, resize, and paste image 1
-        img1_no_bg = remove(img1)
-        resized_img1 = img1_no_bg.resize(dest_img1_size, Image.Resampling.LANCZOS)
-        final_image.paste(resized_img1, dest_img1_pos, mask=resized_img1)
-        log("Step 2", "Pasted new image 1.")
 
-        # --- UNCHANGED: Process Image 2 from PDF ---
+        # Make white/near-white pixels transparent
+        datas = img1.getdata()
+        new_data = []
+        for item in datas:
+            # item = (R, G, B, A)
+            if item[0] > 200 and item[1] > 200 and item[2] > 200:  # near-white
+                new_data.append((255, 255, 255, 0))  # transparent
+            else:
+                new_data.append(item)
+        img1.putdata(new_data)
+
+        # Resize and paste with alpha mask
+        resized_img1 = img1.resize(dest_img1_size, Image.Resampling.LANCZOS)
+        final_image.paste(resized_img1, dest_img1_pos, mask=resized_img1)
+        log("Step 2", "Pasted new image 1 with transparent background.")
+
+        # --- Process Image 2 from PDF ---
         zoom_factor = 3.0
         matrix = fitz.Matrix(zoom_factor, zoom_factor)
         pix2 = page.get_pixmap(matrix=matrix, clip=source_rect2)
@@ -84,7 +87,7 @@ def process_image1_and_2(pdf_doc, template_path, image3_path, final_size=(1832, 
         log("Step 2", "Pasted image 2.")
 
         # Small reuse of image1
-        new_img1_resized = img1_no_bg.resize((81, 99), Image.Resampling.LANCZOS)
+        new_img1_resized = img1.resize((81, 99), Image.Resampling.LANCZOS)
         final_image.paste(new_img1_resized, (716, 416), mask=new_img1_resized)
 
         log("Step 2", "Done with image 1 & 2")
@@ -93,13 +96,18 @@ def process_image1_and_2(pdf_doc, template_path, image3_path, final_size=(1832, 
         log("Step 2", f"Error: {e}")
         return None
 
+
 def process_image3_image4_with_ocr(template, image3_path, image4_path):
-    """Crops regions from images 3 and 4, performs OCR, and pastes them."""
     try:
         log("Step 3", "Processing image 3 and 4 with OCR...")
         regions = [
             {"type": "ocr", "source_img": "img3", "snapshot": (231, 2451, 957, 111), "paste": (355, 385)},
             {"type": "paste", "source_img": "img3", "snapshot": (525, 2628, 825, 285), "paste": (417, 439, 220, 75)},
+
+            # Rotated OCR regions (bottom-to-top) — font size 22
+            {"type": "ocr_rotated", "source_img": "img3", "snapshot": (1778, 1128, 56, 450), "paste": (17, 339)},
+            {"type": "ocr_rotated", "source_img": "img3", "snapshot": (1778, 524, 62, 552), "paste": (17, 98)},
+
             {"type": "paste", "source_img": "img4", "snapshot": (1248, 2052, 546, 96), "paste": (1056, 462, 161, 30)},
         ]
 
@@ -107,10 +115,11 @@ def process_image3_image4_with_ocr(template, image3_path, image4_path):
         src_img4 = Image.open(image4_path).convert("RGB")
         draw = ImageDraw.Draw(template)
 
+        # --- Load default font for horizontal OCR and pasted text (size 24) ---
         try:
-            font = ImageFont.truetype("NotoSansEthiopic-Bold.ttf", 24)
+            default_font = ImageFont.truetype("NotoSansEthiopic-Bold.ttf", 24)
         except IOError:
-            font = ImageFont.load_default()
+            default_font = ImageFont.load_default()
 
         for reg in regions:
             x, y, w, h = reg["snapshot"]
@@ -121,8 +130,33 @@ def process_image3_image4_with_ocr(template, image3_path, image4_path):
                 text = pytesseract.image_to_string(cropped, lang="eng").strip()
                 log("Step 3", f"OCR result: '{text}'")
                 if text:
-                    draw.text(reg["paste"], text, font=font, fill=(0,0,0))
-            else:
+                    draw.text(reg["paste"], text, font=default_font, fill=(0,0,0))
+
+            elif reg["type"] == "ocr_rotated":
+                rotated = cropped.rotate(-90, expand=True)
+                text = pytesseract.image_to_string(rotated, lang="eng").strip()
+                log("Step 3", f"OCR rotated result: '{text}'")
+
+                if text:
+                    # --- Font size 22 for rotated text ---
+                    try:
+                        font = ImageFont.truetype("NotoSansEthiopic-Bold.ttf", 21)
+                    except IOError:
+                        font = ImageFont.load_default()
+
+                    # --- Inline vertical text drawing (bottom-to-top) ---
+                    bbox = font.getbbox(text)
+                    text_width = bbox[2] - bbox[0]
+                    text_height = bbox[3] - bbox[1]
+
+                    txt_img = Image.new("RGBA", (text_width, text_height), (255, 255, 255, 0))
+                    d = ImageDraw.Draw(txt_img)
+                    d.text((0, -bbox[1]), text, font=font, fill=(0,0,0,255))
+
+                    rotated_text = txt_img.rotate(90, expand=1, resample=Image.Resampling.BICUBIC)
+                    template.paste(rotated_text, reg["paste"], rotated_text)
+
+            else:  # normal paste
                 p_x, p_y, p_w, p_h = reg["paste"]
                 resized = cropped.resize((p_w, p_h), Image.Resampling.LANCZOS)
                 template.paste(resized, (p_x, p_y))
@@ -132,102 +166,6 @@ def process_image3_image4_with_ocr(template, image3_path, image4_path):
     except Exception as e:
         log("Step 3", f"Error: {e}")
         return None
-
-# ---- TEXT EXTRACTION AND DRAWING ----
-def extract_dates_from_image(image_path):
-    """Safely extracts Ethiopian and English dates from the 'Date of Issue' line."""
-    try:
-        img = Image.open(image_path)
-        text = pytesseract.image_to_string(img)
-
-        lines = [line.strip() for line in text.splitlines() if line.strip()]
-        if not lines:
-            log("OCR", "No text found in the image.")
-            return None, None
-
-        doi_line = None
-        for line in lines:
-            if re.search(r"Date\s*of\s*Issue", line, re.IGNORECASE):
-                doi_line = line
-                break
-
-        if not doi_line:
-            log("OCR", "Could not find 'Date of Issue' line in OCR output.")
-            return None, None
-
-        log("OCR", f"Found 'Date of Issue' line: '{doi_line}'")
-
-        cleaned_line = re.sub(r"[^\w:/]", "", doi_line)
-        match = re.search(r"(\d{4}/\d{2}/\d{2}).*(\d{4}/[A-Za-z]{3}/\d{2})", cleaned_line)
-        if match:
-            eth_date, eng_date = match.groups()
-            log("OCR", f"Extracted ETH={eth_date}, ENG={eng_date}")
-            return eth_date, eng_date
-        else:
-            log("OCR", f"Could not extract dates from line: '{doi_line}'")
-            return None, None
-
-    except Exception as e:
-        log("OCR", f"Error during OCR: {e}")
-        return None, None
-
-def draw_vertical_text(base_img, text, position, font, fill_color=(0, 0, 0, 255)):
-    """
-    Draws text bottom-to-top at a given position, correctly handling transparency.
-    """
-    bbox = font.getbbox(text)
-    text_width = bbox[2] - bbox[0]
-    text_height = bbox[3] - bbox[1]
-
-    txt_img = Image.new("RGBA", (text_width, text_height), (255, 255, 255, 0))
-    d = ImageDraw.Draw(txt_img)
-    d.text((0, -bbox[1]), text, font=font, fill=fill_color)
-    rotated_text = txt_img.rotate(90, expand=1, resample=Image.Resampling.BICUBIC)
-    base_img.paste(rotated_text, position, rotated_text)
-    
-def process_dates_from_image(template_img, image3_path):
-    """Integrates date extraction and vertical drawing safely."""
-    try:
-        log("Step 4.5", "Extracting and placing dates from image 3...")
-        eth_date, eng_date = extract_dates_from_image(image3_path)
-
-        # Load font
-        try:
-            font = ImageFont.truetype("NotoSansEthiopic-Bold.ttf", 21)
-        except IOError:
-            font = ImageFont.load_default()
-
-        # Use placeholders if OCR fails
-        eth_date = eth_date or "YYYY/MM/DD"
-        eng_date = eng_date or "YYYY/Mon/DD"
-
-        draw_vertical_text(template_img, eth_date, (17, 339), font)
-        draw_vertical_text(template_img, eng_date, (17, 98), font)
-
-        log("Step 4.5", "Successfully placed extracted dates (or placeholders).")
-        return template_img
-
-    except Exception as e:
-        log("Step 4.5", f"Error processing dates: {e}")
-        return template_img
-    
-def write_dates_on_template(template_img, eth_date, eng_date):
-    """Draws the extracted dates vertically on the template image."""
-    log("Step 3.5", "Drawing dates on template...")
-    try:
-        font = ImageFont.truetype("NotoSansEthiopic-Bold.ttf", 21)
-    except IOError:
-        font = ImageFont.load_default()
-
-    if eth_date:
-        draw_vertical_text(template_img, eth_date, (17, 339), font)
-        log("Step 3.5", "Wrote Ethiopian date.")
-    if eng_date:
-        draw_vertical_text(template_img, eng_date, (17, 98), font)
-        log("Step 3.5", "Wrote English date.")
-    
-    log("Step 3.5", "Done drawing dates.")
-    return template_img
 
 # ---- TEXT BLOCKS ----
 def write_pdf_blocks_on_template(pdf_doc, template_img):
@@ -239,7 +177,7 @@ def write_pdf_blocks_on_template(pdf_doc, template_img):
         {"pdf_block_index": 32, "png_point": {"x": 960, "y": 67, "w": 300, "h": 30}},
         {"pdf_block_index": 33, "png_point": {"x": 960, "y": 200, "w": 300, "h": 30}},
         {"pdf_block_index": 34, "png_point": {"x": 961, "y": 286, "w": 378, "h": 76}},
-        {"pdf_block_index": 35, "png_point": {"x": 961, "y": 362, "w": 377, "h": 82}},  # default y=362
+        {"pdf_block_index": 35, "png_point": {"x": 961, "y": 362, "w": 377, "h": 82}},  # fixed y=362
         {"pdf_block_index": 37, "png_point": {"x": 355, "y": 158, "w": 200, "h": 30}},
     ]
     single_line_blocks = [29, 30, 31]
@@ -263,7 +201,7 @@ def write_pdf_blocks_on_template(pdf_doc, template_img):
             log("Step 4", f"Block {idx} empty")
             continue
 
-        # Handle block 34 (multi-line allowed, cut each line at x=1335)
+        # ---- Block 34: wrap lines until x=1335 ----
         if idx == 34:
             x, y, w, h = point["x"], point["y"], point["w"], point["h"]
             max_width = 1335 - x
@@ -284,55 +222,37 @@ def write_pdf_blocks_on_template(pdf_doc, template_img):
                 draw.text((x, y + i * line_height), current_text, font=font, fill="black")
                 log("Step 4", f"Wrote block 34 line {i+1} with {len(current_text)} chars")
 
-            # adjust block 35 position
-            for m in block_to_png_mapping:
-                if m["pdf_block_index"] == 35:
-                    if "\n" in text:
-                        m["png_point"]["y"] = 385
-                        log("Step 4", "Shifted block 35 y=385 due to multiline block 34")
-                    else:
-                        m["png_point"]["y"] = 362
-            continue
+            continue  # done with block 34
 
-        # Handle block 35 wrapping (unchanged)
+        # ---- Block 35: wrap until x=1335 (fixed y=362, no shifting) ----
         if idx == 35:
             x, y, w, h = point["x"], point["y"], point["w"], point["h"]
-            lines = []
-            current_line = ""
-            max_width = 1335 - x
-
-            for line in text.split("\n"):
-                for word in line.split(" "):
-                    test_line = current_line + (" " if current_line else "") + word
-                    bbox = font.getbbox(test_line)
-                    line_width = bbox[2] - bbox[0]
-                    if line_width > max_width:
-                        if current_line:
-                            lines.append(current_line)
-                        current_line = word
-                    else:
-                        current_line = test_line
-                if current_line:
-                    lines.append(current_line)
-                    current_line = ""
-
+            max_x = 1335
             bbox = font.getbbox("Ay")
             line_height = bbox[3] - bbox[1] + 2
-            max_lines = h // line_height
-            for i, line in enumerate(lines[:max_lines]):
-                draw.text((x, y + i * line_height), line, font=font, fill="black")
 
-            log("Step 4", f"Wrote block 35 with {len(lines)} wrapped lines")
+            lines = text.split("\n")
+            for i, line in enumerate(lines):
+                current_text = ""
+                for char in line:
+                    test_text = current_text + char
+                    bbox = font.getbbox(test_text)
+                    text_width = bbox[2] - bbox[0]
+                    if x + text_width > max_x:
+                        break
+                    current_text = test_text
+                draw.text((x, y + i * line_height), current_text, font=font, fill="black")
+            log("Step 4", "Wrote block 35 up to x=1335")
             continue
 
-        # Handle single-line formatting
+        # ---- Single-line formatting ----
         if idx in single_line_blocks:
             text = "|".join(text.split())
 
         draw.text((point["x"], point["y"]), text, fill="black", font=font)
         log("Step 4", f"Wrote block {idx}")
 
-    # Special FAN 7-digit extraction (block 36)
+    # ---- Special FAN 7-digit extraction (block 36) ----
     block_index_to_process = 36
     if block_index_to_process < len(pdf_text_blocks):
         full_text = pdf_text_blocks[block_index_to_process][4].strip()
@@ -350,7 +270,6 @@ def write_pdf_blocks_on_template(pdf_doc, template_img):
 
     log("Step 4", "Done writing text blocks")
     return template_img
-
 
 def flip_and_place_on_a4(source_img_path, a4_template_path, output_path):
     """Flips the merged image horizontally and places it on an A4 template."""
@@ -389,17 +308,13 @@ def main_process(pdf_path, template_path, output_path, a4_template_path, output_
         log("Main", "Less than 4 images found in PDF")
         return
 
+    # MODIFIED: Pass the path to image_3.png (images[2]) to the function
     final_image = process_image1_and_2(pdf_doc, template_path, images[3])
     if not final_image: return
 
     final_image = process_image3_image4_with_ocr(final_image, images[3], images[2])
     if not final_image: return
-    
-    # NEW STEP: Extract and draw dates from image 3
-    eth_date, eng_date = extract_dates_from_image(images[3])
-    if eth_date or eng_date:
-        final_image = write_dates_on_template(final_image, eth_date, eng_date)
-    
+
     final_image = write_pdf_blocks_on_template(pdf_doc, final_image)
 
     try:
