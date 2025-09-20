@@ -143,7 +143,6 @@ def process_image3_image4_with_ocr(template, image3_path, image4_path):
         return None
 
 # ---- TEXT BLOCKS ----
-# ---- TEXT BLOCKS ----
 def write_pdf_blocks_on_template(pdf_doc, template_img):
     log("Step 4", "Writing PDF text blocks...")
     block_to_png_mapping = [
@@ -177,57 +176,38 @@ def write_pdf_blocks_on_template(pdf_doc, template_img):
             log("Step 4", f"Block {idx} empty")
             continue
 
-        # Handle block 34
+        # Handle block 34 (multi-line allowed, cut each line at x=1335)
         if idx == 34:
             x, y, w, h = point["x"], point["y"], point["w"], point["h"]
-            lines = []
-            current_line = ""
             max_width = 1335 - x
-
-            # Determine if font needs to be reduced
-            font34 = font  # default
-            full_text_bbox = font.getbbox(text)
-            text_width = full_text_bbox[2] - full_text_bbox[0]
-            if text_width > max_width:
-                try:
-                    font34 = ImageFont.truetype("NotoSansEthiopic-Bold.ttf", 20.5)
-                except IOError:
-                    font34 = font
-
-            for line in text.split("\n"):
-                for word in line.split(" "):
-                    test_line = current_line + (" " if current_line else "") + word
-                    bbox = font34.getbbox(test_line)
-                    line_width = bbox[2] - bbox[0]
-                    if line_width > max_width:
-                        if current_line:
-                            lines.append(current_line)
-                        current_line = word
-                    else:
-                        current_line = test_line
-                if current_line:
-                    lines.append(current_line)
-                    current_line = ""
-
-            bbox = font34.getbbox("Ay")
+            bbox = font.getbbox("Ay")
             line_height = bbox[3] - bbox[1] + 2
-            max_lines = h // line_height
-            for i, line in enumerate(lines[:max_lines]):
-                draw.text((x, y + i * line_height), line, font=font34, fill="black")
 
-            log("Step 4", f"Wrote block 34 with {len(lines)} wrapped lines (font size {font34.size if hasattr(font34,'size') else 'default'})")
+            lines = text.split("\n")
+            for i, line in enumerate(lines):
+                current_text = ""
+                for char in line:
+                    test_text = current_text + char
+                    bbox = font.getbbox(test_text)
+                    text_width = bbox[2] - bbox[0]
+                    if text_width > max_width:
+                        break
+                    current_text = test_text
+
+                draw.text((x, y + i * line_height), current_text, font=font, fill="black")
+                log("Step 4", f"Wrote block 34 line {i+1} with {len(current_text)} chars")
 
             # adjust block 35 position
             for m in block_to_png_mapping:
                 if m["pdf_block_index"] == 35:
                     if "\n" in text:
                         m["png_point"]["y"] = 385
-                        log("Step 4", "Shifted block 35 y=385 due to newline in block 34")
+                        log("Step 4", "Shifted block 35 y=385 due to multiline block 34")
                     else:
-                        m["png_point"]["y"] = 362  # restore default
+                        m["png_point"]["y"] = 362
             continue
 
-        # Handle block 35 wrapping
+        # Handle block 35 wrapping (unchanged)
         if idx == 35:
             x, y, w, h = point["x"], point["y"], point["w"], point["h"]
             lines = []
@@ -258,14 +238,14 @@ def write_pdf_blocks_on_template(pdf_doc, template_img):
             log("Step 4", f"Wrote block 35 with {len(lines)} wrapped lines")
             continue
 
-        # Handle single line formatting
+        # Handle single-line formatting
         if idx in single_line_blocks:
             text = "|".join(text.split())
 
         draw.text((point["x"], point["y"]), text, fill="black", font=font)
         log("Step 4", f"Wrote block {idx}")
 
-    # Special 7-digit extraction from block 36
+    # Special FAN 7-digit extraction (block 36)
     block_index_to_process = 36
     if block_index_to_process < len(pdf_text_blocks):
         full_text = pdf_text_blocks[block_index_to_process][4].strip()
@@ -283,6 +263,7 @@ def write_pdf_blocks_on_template(pdf_doc, template_img):
 
     log("Step 4", "Done writing text blocks")
     return template_img
+
 
 
 
