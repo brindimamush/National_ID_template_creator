@@ -11,7 +11,6 @@ def log(step, msg):
 
 # ---- IMAGE PROCESSING ----
 def extract_images(pdf_doc, temp_dir=".temp"):
-    """Extracts up to 5 images from the first page of a PDF."""
     os.makedirs(temp_dir, exist_ok=True)
     images = []
     try:
@@ -22,10 +21,9 @@ def extract_images(pdf_doc, temp_dir=".temp"):
             xref = img[0]
             pix = fitz.Pixmap(pdf_doc, xref)
             out_path = os.path.join(temp_dir, f"image_{i}.png")
-            # Save pixmap as PNG
-            if pix.n - pix.alpha < 4:  # this is GRAY or RGB
+            if pix.n - pix.alpha < 4:
                 pix.save(out_path)
-            else:  # CMYK: convert to RGB first
+            else:
                 pix0 = fitz.Pixmap(fitz.csRGB, pix)
                 pix0.save(out_path)
                 pix0 = None
@@ -36,66 +34,89 @@ def extract_images(pdf_doc, temp_dir=".temp"):
         log("Step 1", f"Error extracting images: {e}")
     return images
 
-def process_image1_and_2(pdf_doc, template_path, image3_path, final_size=(1832, 560)):
-    """
-    Processes images for the final composition.
-    - Image 1 is cropped from image3_path (ID photo) with transparent background.
-    - Image 2 is extracted directly from a PDF rectangle.
-    """
+def process_image1_and_2(pdf_doc, template_path, final_size=(1832, 560)):
     try:
         log("Step 2", "Processing image 1 and 2...")
 
         page = pdf_doc[0]
+        source_rect1 = fitz.Rect(53.8, 99.7, 138.8, 217.2)
         source_rect2 = fitz.Rect(110.0, 411.0, 274.0, 573.0)
 
         dest_img1_pos, dest_img1_size = (49, 150), (285, 363)
         dest_img2_pos, dest_img2_size = (1357, 38), (435, 436)
 
+        # Base canvas + template
         final_image = Image.new("RGBA", final_size, (255, 255, 255, 255))
         template = Image.open(template_path).resize(final_size, Image.Resampling.LANCZOS)
         final_image.paste(template, (0, 0))
 
-        # --- Process Image 1 (ID photo) with transparency ---
-        log("Step 2", "Cropping image 1 from the extracted image 3...")
-        img3 = Image.open(image3_path).convert("RGBA")
-        crop_box = (524, 411, 524 + 848, 411 + 1093)
-        img1 = img3.crop(crop_box)
-
-        # Make white/near-white pixels transparent
-        datas = img1.getdata()
-        new_data = []
-        for item in datas:
-            # item = (R, G, B, A)
-            if item[0] > 200 and item[1] > 200 and item[2] > 200:  # near-white
-                new_data.append((255, 255, 255, 0))  # transparent
-            else:
-                new_data.append(item)
-        img1.putdata(new_data)
-
-        # Resize and paste with alpha mask
-        resized_img1 = img1.resize(dest_img1_size, Image.Resampling.LANCZOS)
-        final_image.paste(resized_img1, dest_img1_pos, mask=resized_img1)
-        log("Step 2", "Pasted new image 1 with transparent background.")
-
-        # --- Process Image 2 from PDF ---
         zoom_factor = 3.0
         matrix = fitz.Matrix(zoom_factor, zoom_factor)
+
+        # --- Image 1 (ID photo) ---
+        pix1 = page.get_pixmap(matrix=matrix, clip=source_rect1)
+        img1 = Image.frombytes("RGB", [pix1.width, pix1.height], pix1.samples)
+
+        # Remove background (RGBA with alpha)
+        img1_no_bg = remove(img1).convert("RGBA")
+
+        # Separate channels
+        r, g, b, a = img1_no_bg.split()
+
+        # Convert RGB → grayscale, keep alpha unchanged
+        gray = Image.merge("RGB", (r, g, b)).convert("L")
+        img1_bw = Image.merge("RGBA", (gray, gray, gray, a))
+
+        # Paste large black & white image1
+        resized_img1 = img1_bw.resize(dest_img1_size, Image.Resampling.LANCZOS)
+        final_image.paste(resized_img1, dest_img1_pos, mask=resized_img1)
+
+        # --- Image 2 (PDF rectangle, stays color) ---
         pix2 = page.get_pixmap(matrix=matrix, clip=source_rect2)
         img2 = Image.frombytes("RGB", [pix2.width, pix2.height], pix2.samples)
         resized_img2 = img2.resize(dest_img2_size, Image.Resampling.LANCZOS)
         final_image.paste(resized_img2, dest_img2_pos)
-        log("Step 2", "Pasted image 2.")
 
-        # Small reuse of image1
-        new_img1_resized = img1.resize((81, 99), Image.Resampling.LANCZOS)
+        # --- Small reuse of image1 (also black & white, transparent bg) ---
+        new_img1_resized = img1_bw.resize((81, 99), Image.Resampling.LANCZOS)
         final_image.paste(new_img1_resized, (716, 416), mask=new_img1_resized)
 
         log("Step 2", "Done with image 1 & 2")
         return final_image
+
     except Exception as e:
         log("Step 2", f"Error: {e}")
         return None
 
+
+# (All the same functions from before: extract_images, process_image1_and_2,
+#  process_image3_image4_with_ocr, write_pdf_blocks_on_template remain unchanged...)
+
+# ---- NEW: Flip and paste onto A4 template ----
+def flip_and_place_on_a4(source_img_path, a4_template_path, output_path):
+    try:
+        log("Step 5", "Flipping merged image and placing on A4 template...")
+
+        # Open images
+        src_img = Image.open(source_img_path)
+        a4_template = Image.open(a4_template_path).convert("RGBA")
+
+        # Flip horizontally
+        flipped = ImageOps.mirror(src_img)
+
+        # Resize to fit into (w,h)
+        target_x, target_y, target_w, target_h = 113, 47, 2189, 647
+        resized = flipped.resize((target_w, target_h), Image.Resampling.LANCZOS)
+
+        # Paste onto A4
+        a4_template.paste(resized, (target_x, target_y), mask=resized)
+
+        # Save final
+        a4_template.save(output_path, "PNG")
+        log("Step 5", f"✅ Saved flipped+A4 result: {output_path}")
+
+    except Exception as e:
+        log("Step 5", f"Error: {e}")
 
 def process_image3_image4_with_ocr(template, image3_path, image4_path):
     try:
@@ -166,6 +187,7 @@ def process_image3_image4_with_ocr(template, image3_path, image4_path):
     except Exception as e:
         log("Step 3", f"Error: {e}")
         return None
+
 
 # ---- TEXT BLOCKS ----
 def write_pdf_blocks_on_template(pdf_doc, template_img):
@@ -271,30 +293,9 @@ def write_pdf_blocks_on_template(pdf_doc, template_img):
     log("Step 4", "Done writing text blocks")
     return template_img
 
-def flip_and_place_on_a4(source_img_path, a4_template_path, output_path):
-    """Flips the merged image horizontally and places it on an A4 template."""
-    try:
-        log("Step 5", "Flipping merged image and placing on A4 template...")
-
-        src_img = Image.open(source_img_path)
-        a4_template = Image.open(a4_template_path).convert("RGBA")
-
-        flipped = ImageOps.mirror(src_img)
-
-        target_x, target_y, target_w, target_h = 113, 47, 2189, 647
-        resized = flipped.resize((target_w, target_h), Image.Resampling.LANCZOS)
-
-        a4_template.paste(resized, (target_x, target_y), mask=resized)
-
-        a4_template.save(output_path, "PNG")
-        log("Step 5", f"✅ Saved flipped+A4 result: {output_path}")
-
-    except Exception as e:
-        log("Step 5", f"Error: {e}")
 
 # ---- MAIN ----
 def main_process(pdf_path, template_path, output_path, a4_template_path, output_a4_path):
-    """Main function to run the entire PDF-to-image processing pipeline."""
     start_time = time.time()
     try:
         log("Main", "Opening PDF...")
@@ -308,8 +309,7 @@ def main_process(pdf_path, template_path, output_path, a4_template_path, output_
         log("Main", "Less than 4 images found in PDF")
         return
 
-    # MODIFIED: Pass the path to image_3.png (images[2]) to the function
-    final_image = process_image1_and_2(pdf_doc, template_path, images[2])
+    final_image = process_image1_and_2(pdf_doc, template_path)
     if not final_image: return
 
     final_image = process_image3_image4_with_ocr(final_image, images[2], images[3])
@@ -331,12 +331,10 @@ def main_process(pdf_path, template_path, output_path, a4_template_path, output_
     log("Main", f"Finished in {time.time() - start_time:.2f}s")
 
 if __name__ == "__main__":
-    # Define file paths
     input_pdf = "e2.pdf"
     template_image = "template_final.png"
     output_image = "merged_output.png"
     a4_template_image = "a4.png"
     output_a4 = "merged_output_on_a4.png"
 
-    # Run the main process
     main_process(input_pdf, template_image, output_image, a4_template_image, output_a4)
